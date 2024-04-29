@@ -1,8 +1,8 @@
-import * as path from 'node:path';
-import { Input, Telegraf } from 'telegraf';
+import 'dotenv/config';
+import { Telegraf } from 'telegraf';
 import { message } from 'telegraf/filters';
 import { Page, Response, firefox } from 'playwright';
-import 'dotenv/config';
+import type { Context } from 'telegraf';
 
 type MetaInfo = {
     description: string;
@@ -26,7 +26,7 @@ const parseMetaInfo = async (page: Page, url: string): Promise<MetaInfo> => {
         const photo = await page.locator('meta[property="og:image"]').getAttribute('content');
 
         try {
-            await page.waitForSelector('video', { timeout: 1000 });
+            await page.waitForSelector('video', { timeout: 3000 });
             const videoLocator = page.locator('video');
             const video = await videoLocator.getAttribute('src');
 
@@ -46,6 +46,35 @@ const parseMetaInfo = async (page: Page, url: string): Promise<MetaInfo> => {
     }
 };
 
+const showPreview = async (url: string, ctx: Context, page: Page, spoiler = false): Promise<void> => {
+    const waitMsg = await ctx.reply('Loading IG preview...');
+
+    try {
+        await navigate(page, url);
+        const { photo, video, description } = await parseMetaInfo(page, url);
+        const caption = `${url}\n${description}`;
+
+        if (video) {
+            await ctx.replyWithVideo(video, { caption, has_spoiler: spoiler });
+        } else {
+            await ctx.replyWithPhoto(photo, { caption, has_spoiler: spoiler });
+        }
+    } catch (error) {
+        console.error(error.stack);
+    } finally {
+        await ctx.deleteMessage(waitMsg.message_id);
+    }
+};
+
+const isValidUrl = (str: string): boolean => {
+    try {
+        const urlObj = new URL(str);
+        return urlObj.origin.includes('instagram.com');
+    } catch (error) {
+        return false;
+    }
+};
+
 (async (): Promise<void> => {
     try {
         const page = await initPage();
@@ -54,38 +83,33 @@ const parseMetaInfo = async (page: Page, url: string): Promise<MetaInfo> => {
         process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
         bot.on(message('text'), async (ctx): Promise<void> => {
-            const {
-                update: {
-                    message: { text }
-                }
-            } = ctx;
+            try {
+                const {
+                    update: {
+                        message: { text }
+                    }
+                } = ctx;
 
-            if (text.toLowerCase().includes('instagram.com')) {
-                try {
-                    const imgPath = path.join(__dirname, '..', 'loading.png');
-                    const waitMsg = await ctx.replyWithPhoto(Input.fromLocalFile(imgPath), {
-                        caption: 'Loading IG preview...'
-                    });
-                    const { href, searchParams } = new URL(text);
-                    await navigate(page, href);
-                    const { url, photo, video, description } = await parseMetaInfo(page, href);
-                    const caption = `${url}\n${description}`;
-                    const spoiler = searchParams.has('spoiler');
+                if (text.startsWith('/spoiler ')) {
+                    const url = text.split(' ')[1];
 
-                    await ctx.telegram.editMessageMedia(ctx.chat.id, waitMsg.message_id, null, {
-                        media: video ?? photo,
-                        type: video ? 'video' : 'photo',
-                        caption,
-                        has_spoiler: spoiler
-                    });
-                } catch (error) {
-                    console.error(error);
+                    if (isValidUrl(url)) {
+                        await showPreview(url, ctx, page, true);
+                    }
+                } else {
+                    if (isValidUrl(text)) {
+                        await showPreview(text, ctx, page);
+                    }
                 }
+            } catch (error) {
+                console.error(
+                    `Error while trying to handle message id: ${ctx.message.message_id}.\nText: ${ctx.update.message.text}\n${error.stack}`
+                );
             }
         });
 
         await bot.launch();
     } catch (error) {
-        console.error(error);
+        console.error(error.stack);
     }
 })();
