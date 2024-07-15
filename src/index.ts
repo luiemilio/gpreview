@@ -1,46 +1,50 @@
 import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { message } from 'telegraf/filters';
-import { Page, Response, firefox } from 'playwright';
+import { Page, Response, chromium, devices } from 'playwright';
 import type { Context } from 'telegraf';
 
 type MetaInfo = {
     description: string;
     url: string;
-    photo: string;
+    photo?: string;
     video?: string;
 };
 
 const initPage = async (): Promise<Page> => {
-    const browser = await firefox.launch();
-    return browser.newPage();
+    const browser = await chromium.launch();
+    const iphone15 = devices['iPhone 15'];
+    const context = await browser.newContext({ ...iphone15 });
+    return context.newPage();
 };
 
 const navigate = (page: Page, url: string): Promise<Response> => {
     return page.goto(url, { timeout: 10000, waitUntil: 'load' });
 };
 
+const findPhoto = async (page: Page): Promise<string> => {
+    const imgLocator = await page.locator('main').locator('div').first().first().locator('img').first();
+    return imgLocator.getAttribute('src');
+};
+
 const parseMetaInfo = async (page: Page, url: string): Promise<MetaInfo> => {
     try {
         const description = await page.locator('meta[property="og:description"]').getAttribute('content');
-        const photo = await page.locator('meta[property="og:image"]').getAttribute('content');
 
         try {
             await page.waitForSelector('video', { timeout: 3000 });
             const videoLocator = page.locator('video');
             const video = await videoLocator.getAttribute('src');
-
+            
             return {
                 url,
                 description,
-                photo,
                 video
             };
         } catch (error) {
-            //
+            const photo = await findPhoto(page);
+            return { url, description, photo };
         }
-
-        return { url, description, photo };
     } catch (error) {
         console.error(error);
     }
